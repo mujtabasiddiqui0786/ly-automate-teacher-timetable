@@ -2,7 +2,7 @@ import React from 'react';
 
 function TimetableDisplay({ timetable }) {
   if (!timetable) return null;
-  const { days = [], timeSlots = [], events = [] } = timetable;
+  const { days = [], timeSlots = [], events = [], term, week } = timetable;
 
   const getEvent = (day, slot) =>
     events.find(
@@ -40,6 +40,10 @@ function TimetableDisplay({ timetable }) {
   return (
     <section style={{ marginTop: 24 }}>
       <h2>Extracted Timetable</h2>
+      <div style={{ color: '#555', marginBottom: 8 }}>
+        {term && <span style={{ marginRight: 12 }}>Term: {term}</span>}
+        {week && <span>Week: {week}</span>}
+      </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
         <thead>
           <tr>

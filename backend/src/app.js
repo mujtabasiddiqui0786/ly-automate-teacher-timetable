@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import timetableRouter from './routes/timetable.js';
+import tenantRouter from './routes/tenant.js';
 
 dotenv.config();
 
@@ -16,6 +17,7 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/timetable', timetableRouter);
+app.use('/api/tenants', tenantRouter);
 
 app.use((err, req, res, next) => {
   // eslint-disable-line no-unused-vars
