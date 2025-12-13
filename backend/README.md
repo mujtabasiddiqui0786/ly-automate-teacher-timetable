@@ -9,5 +9,5 @@ Express API that ingests timetable images/PDFs, preprocesses them, performs OCR,
 
 ## Env
 - `PORT` (default 4000)
-- `OCR_SERVICE_URL` (optional: EasyOCR microservice)
+- `OCR_SERVICE_URL` (optional: EasyOCR microservice; falls back to local Tesseract if unavailable)
 
