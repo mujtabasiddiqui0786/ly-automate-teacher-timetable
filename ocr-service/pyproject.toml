@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "ocr-service"
+version = "0.1.0"
+description = "Optional EasyOCR FastAPI service for timetable extraction"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "0.115.5"
+uvicorn = {extras = ["standard"], version = "0.32.0"}
+easyocr = "1.7.1"
+python-multipart = "0.0.9"
+Pillow = "10.4.0"
+
+[tool.poetry.group.dev.dependencies]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
