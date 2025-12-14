@@ -13,4 +13,10 @@ package-lock.json
 *.pyc
 __pycache__/
 *.traineddata
+venv/
+.python-version
+poetry.lock
+ocr-service/venv/
+ocr-service/.python-version
+ocr-service/poetry.lock
 

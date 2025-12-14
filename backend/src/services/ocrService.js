@@ -14,30 +14,40 @@ async function releaseWorker(worker) {
   workerPool.push(worker);
 }
 
-export async function runOcr(imageBuffer, options = {}) {
-  const { language = 'eng' } = options;
-
-  // Prefer external EasyOCR service when configured
-  if (OCR_SERVICE_URL) {
-    try {
-      const { data } = await axios.post(
-        `${OCR_SERVICE_URL.replace(/\/$/, '')}/ocr`,
-        { image_b64: imageBuffer.toString('base64') },
-        { timeout: 30000 }
-      );
-      return {
-        text: data?.text || '',
-        words: data?.words || [],
-        lines: data?.lines || [],
-        source: 'easyocr-service',
-      };
-    } catch (err) {
-      // Fall back to local Tesseract
-      // eslint-disable-next-line no-console
-      console.warn('EasyOCR service failed, falling back to Tesseract:', err.message);
-    }
+async function runEasyOcr(imageBuffer, options = {}) {
+  if (!OCR_SERVICE_URL) return null;
+  try {
+    const endpoint = `${OCR_SERVICE_URL.replace(/\/$/, '')}/ocr-table`;
+    const FormData = (await import('form-data')).default;
+    const formData = new FormData();
+    formData.append('file', imageBuffer, {
+      filename: 'image.png',
+      contentType: 'image/png',
+    });
+    
+    const { data } = await axios.post(
+      endpoint,
+      formData,
+      {
+        headers: formData.getHeaders(),
+        timeout: 30000,
+      }
+    );
+    return {
+      text: data?.text || '',
+      words: data?.words || [],
+      cells: data?.cells || [],
+      source: 'easyocr',
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('EasyOCR service failed, falling back to Tesseract:', err.message);
+    return null;
   }
+}
 
+async function runTesseract(imageBuffer, options = {}) {
+  const { language = 'eng' } = options;
   const worker = await getWorker();
   try {
     const { data } = await worker.recognize(imageBuffer, language, {
@@ -58,15 +68,23 @@ export async function runOcr(imageBuffer, options = {}) {
       source: 'tesseract',
     };
   } catch (err) {
-    // Provide a graceful fallback so extraction can continue
     return {
       text: '',
       words: [],
       lines: [],
       error: err.message,
+      source: 'tesseract',
     };
   } finally {
     await releaseWorker(worker);
   }
+}
+
+export async function runOcr(imageBuffer, options = {}) {
+  // Try EasyOCR-first
+  const easy = await runEasyOcr(imageBuffer, options);
+  if (easy) return easy;
+  // Fallback to Tesseract
+  return runTesseract(imageBuffer, options);
 }
 
