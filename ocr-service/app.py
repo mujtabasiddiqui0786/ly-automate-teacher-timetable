@@ -164,6 +164,63 @@ def _cluster_lines(coords: List[int], eps: int) -> List[int]:
     return clusters
 
 
+def _find_dominant_spacing(coords: List[int]) -> float:
+    """
+    Find the dominant spacing between coordinates using statistical analysis.
+    This helps identify the true grid spacing vs noise.
+    """
+    if len(coords) < 2:
+        return 0.0
+    spacings = [coords[i+1] - coords[i] for i in range(len(coords) - 1)]
+    if not spacings:
+        return 0.0
+    
+    # Use median as robust estimate of dominant spacing
+    median_spacing = float(np.median(spacings))
+    
+    # Find mode by clustering spacings and taking the most common cluster
+    if len(spacings) > 1:
+        # Group spacings within 20% of each other
+        tolerance = median_spacing * 0.2
+        clusters = {}
+        for s in spacings:
+            matched = False
+            for key in clusters:
+                if abs(s - key) <= tolerance:
+                    clusters[key].append(s)
+                    matched = True
+                    break
+            if not matched:
+                clusters[s] = [s]
+        
+        # Find largest cluster
+        if clusters:
+            largest_cluster = max(clusters.values(), key=len)
+            return float(np.median(largest_cluster))
+    
+    return median_spacing
+
+
+def _adaptive_eps_from_spacing(coords: List[int], image_dim: int) -> int:
+    """
+    Automatically determine clustering epsilon based on detected spacing patterns.
+    This adapts to different image layouts.
+    """
+    if len(coords) < 2:
+        return max(4, int(image_dim * 0.01))
+    
+    dominant_spacing = _find_dominant_spacing(coords)
+    if dominant_spacing > 0:
+        # Use 30% of dominant spacing as epsilon (adaptive to grid structure)
+        eps = int(dominant_spacing * 0.3)
+        # But ensure minimum and maximum bounds
+        eps = max(4, min(eps, int(image_dim * 0.02)))
+        return eps
+    
+    # Fallback to image-based heuristic
+    return max(4, int(image_dim * 0.01))
+
+
 def _collapse_close_lines(coords: List[int], median_cell_dim: int, threshold_fraction: float = 0.5) -> List[int]:
     """
     Collapse consecutive lines with tiny gaps to reduce over-segmentation.
@@ -294,11 +351,23 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
     horiz = cv2.morphologyEx(th, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (hk_w, hk_h)))
     vert = cv2.morphologyEx(th, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (vk_w, vk_h)))
 
-    # Configurable eps and min_gap via environment variables (tuned for large PNGs)
-    eps_base = float(os.environ.get("LINE_EPS", min(w, h) * 0.015))  # increased for large images
-    eps = max(8, round(eps_base))
-    x_lines = _line_positions(vert, axis=0, min_ratio=0.45, eps=eps)
-    y_lines = _line_positions(horiz, axis=1, min_ratio=0.45, eps=eps)
+    # Adaptive eps: detect initial lines first, then determine optimal eps from spacing
+    # First pass: use conservative eps to get initial line candidates
+    initial_eps = max(4, int(min(w, h) * 0.008))
+    x_lines_initial = _line_positions(vert, axis=0, min_ratio=0.4, eps=initial_eps)
+    y_lines_initial = _line_positions(horiz, axis=1, min_ratio=0.4, eps=initial_eps)
+    
+    # Determine adaptive eps from detected spacing patterns
+    eps_x = _adaptive_eps_from_spacing(x_lines_initial, w) if x_lines_initial else max(4, int(w * 0.01))
+    eps_y = _adaptive_eps_from_spacing(y_lines_initial, h) if y_lines_initial else max(4, int(h * 0.01))
+    
+    # Allow override via env var, but prefer adaptive
+    if os.environ.get("LINE_EPS"):
+        eps_x = eps_y = max(4, int(float(os.environ.get("LINE_EPS"))))
+    
+    # Second pass: cluster with adaptive eps
+    x_lines = _line_positions(vert, axis=0, min_ratio=0.45, eps=eps_x)
+    y_lines = _line_positions(horiz, axis=1, min_ratio=0.45, eps=eps_y)
 
     # further prune very-close lines to avoid exploding columns/rows
     def _prune(lines, min_gap):
@@ -313,37 +382,57 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
     x_lines = _prune(x_lines, min_gap)
     y_lines = _prune(y_lines, min_gap)
 
-    # Collapse close lines using median cell dimension (aggressive dedupe)
+    # Collapse close lines using adaptive threshold based on detected spacing
     if len(x_lines) > 2 and len(y_lines) > 2:
-        median_cell_w = float(np.median([x_lines[i+1] - x_lines[i] for i in range(len(x_lines)-1)])) if len(x_lines) > 1 else w / 10
-        median_cell_h = float(np.median([y_lines[i+1] - y_lines[i] for i in range(len(y_lines)-1)])) if len(y_lines) > 1 else h / 10
-        # Use 0.5 threshold as recommended
-        x_lines = _collapse_close_lines(x_lines, int(median_cell_w), threshold_fraction=0.5)
-        y_lines = _collapse_close_lines(y_lines, int(median_cell_h), threshold_fraction=0.5)
+        # Find dominant spacing to determine collapse threshold
+        dominant_w = _find_dominant_spacing(x_lines)
+        dominant_h = _find_dominant_spacing(y_lines)
         
-        # Aggressive dedupe: if grid is too large, rebuild with larger eps
-        expected_cols = int(os.environ.get("EXPECTED_COLS", "10"))
-        expected_rows = int(os.environ.get("EXPECTED_ROWS", "12"))
-        aggressive_threshold = float(os.environ.get("AGGRESSIVE_DEDUPE_THRESHOLD", expected_cols * 1.5))
+        # Use 40% of dominant spacing as collapse threshold (adaptive)
+        threshold_w = int(dominant_w * 0.4) if dominant_w > 0 else w // 20
+        threshold_h = int(dominant_h * 0.4) if dominant_h > 0 else h // 20
         
-        if len(x_lines) - 1 > aggressive_threshold:
-            # Rebuild with larger eps
-            eps_aggressive = int(eps * 1.5)
-            x_lines_new = _line_positions(vert, axis=0, min_ratio=0.45, eps=eps_aggressive)
-            x_lines_new = _prune(x_lines_new, min_gap)
-            if len(x_lines_new) < len(x_lines):
-                x_lines = x_lines_new
-                median_cell_w = float(np.median([x_lines[i+1] - x_lines[i] for i in range(len(x_lines)-1)])) if len(x_lines) > 1 else w / 10
-                x_lines = _collapse_close_lines(x_lines, int(median_cell_w), threshold_fraction=0.5)
+        x_lines = _collapse_close_lines(x_lines, threshold_w, threshold_fraction=0.5)
+        y_lines = _collapse_close_lines(y_lines, threshold_h, threshold_fraction=0.5)
         
-        if len(y_lines) - 1 > aggressive_threshold:
-            eps_aggressive = int(eps * 1.5)
-            y_lines_new = _line_positions(horiz, axis=1, min_ratio=0.45, eps=eps_aggressive)
-            y_lines_new = _prune(y_lines_new, min_gap)
-            if len(y_lines_new) < len(y_lines):
-                y_lines = y_lines_new
-                median_cell_h = float(np.median([y_lines[i+1] - y_lines[i] for i in range(len(y_lines)-1)])) if len(y_lines) > 1 else h / 10
-                y_lines = _collapse_close_lines(y_lines, int(median_cell_h), threshold_fraction=0.5)
+        # Adaptive dedupe: if grid is unusually large, analyze spacing distribution
+        # to detect if we have multiple spacing modes (real grid vs decorative)
+        if len(x_lines) > 15:  # Likely over-segmented
+            spacings = [x_lines[i+1] - x_lines[i] for i in range(len(x_lines)-1)]
+            if len(spacings) > 1:
+                # Find if there are two distinct spacing modes
+                median_sp = float(np.median(spacings))
+                # Group into "narrow" (likely decorative) and "wide" (likely real grid)
+                narrow_spacings = [s for s in spacings if s < median_sp * 0.7]
+                wide_spacings = [s for s in spacings if s >= median_sp * 0.7]
+                
+                # If we have many narrow spacings, they're likely decorative
+                if len(narrow_spacings) > len(wide_spacings) * 0.5:
+                    # Rebuild keeping only lines that create wide spacings
+                    new_x_lines = [x_lines[0]]
+                    for i in range(len(x_lines) - 1):
+                        spacing = x_lines[i+1] - x_lines[i]
+                        if spacing >= median_sp * 0.7:
+                            new_x_lines.append(x_lines[i+1])
+                    if len(new_x_lines) < len(x_lines):
+                        x_lines = new_x_lines
+        
+        # Same for y_lines
+        if len(y_lines) > 15:
+            spacings = [y_lines[i+1] - y_lines[i] for i in range(len(y_lines)-1)]
+            if len(spacings) > 1:
+                median_sp = float(np.median(spacings))
+                narrow_spacings = [s for s in spacings if s < median_sp * 0.7]
+                wide_spacings = [s for s in spacings if s >= median_sp * 0.7]
+                
+                if len(narrow_spacings) > len(wide_spacings) * 0.5:
+                    new_y_lines = [y_lines[0]]
+                    for i in range(len(y_lines) - 1):
+                        spacing = y_lines[i+1] - y_lines[i]
+                        if spacing >= median_sp * 0.7:
+                            new_y_lines.append(y_lines[i+1])
+                    if len(new_y_lines) < len(y_lines):
+                        y_lines = new_y_lines
 
     # ensure boundaries
     if 0 not in x_lines:
@@ -375,12 +464,59 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
             cell_widths.append(width)
             cell_heights.append(height)
     
-    # Compute median dimensions for filtering
+    # Compute median dimensions for filtering (adaptive threshold)
     median_width = float(np.median(cell_widths)) if cell_widths else w / 10
     median_height = float(np.median(cell_heights)) if cell_heights else h / 10
-    min_cell_width_frac = float(os.environ.get("MIN_CELL_WIDTH_FRAC", "0.15"))
-    min_width = median_width * min_cell_width_frac
-    min_height = median_height * min_cell_width_frac
+    
+    # Use statistical analysis: find the dominant cell size and filter outliers
+    # This adapts to different layouts automatically
+    if cell_widths and len(cell_widths) > 5:
+        # Find dominant width (mode) by clustering
+        width_clusters = {}
+        tolerance = median_width * 0.3
+        for width in cell_widths:
+            matched = False
+            for key in width_clusters:
+                if abs(width - key) <= tolerance:
+                    width_clusters[key].append(width)
+                    matched = True
+                    break
+            if not matched:
+                width_clusters[width] = [width]
+        
+        # Use the largest cluster as dominant width
+        if width_clusters:
+            dominant_width_cluster = max(width_clusters.values(), key=len)
+            dominant_width = float(np.median(dominant_width_cluster))
+            # Filter threshold: 20% of dominant width (adaptive)
+            min_width = dominant_width * 0.2
+        else:
+            min_width = median_width * 0.15
+    else:
+        min_width = median_width * 0.15
+    
+    # Same for height
+    if cell_heights and len(cell_heights) > 5:
+        height_clusters = {}
+        tolerance = median_height * 0.3
+        for height in cell_heights:
+            matched = False
+            for key in height_clusters:
+                if abs(height - key) <= tolerance:
+                    height_clusters[key].append(height)
+                    matched = True
+                    break
+            if not matched:
+                height_clusters[height] = [height]
+        
+        if height_clusters:
+            dominant_height_cluster = max(height_clusters.values(), key=len)
+            dominant_height = float(np.median(dominant_height_cluster))
+            min_height = dominant_height * 0.2
+        else:
+            min_height = median_height * 0.15
+    else:
+        min_height = median_height * 0.15
     
     # Build cells, filtering out narrow decorative separators
     for ri in range(len(y_lines) - 1):
@@ -418,7 +554,8 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
         # Save parameters
         import json
         params = {
-            "eps": eps,
+            "eps_x": eps_x if 'eps_x' in locals() else None,
+            "eps_y": eps_y if 'eps_y' in locals() else None,
             "min_gap": min_gap,
             "image_dims": {"w": int(w), "h": int(h)},
             "grid_shape": {"rows": len(y_lines) - 1, "cols": len(x_lines) - 1},
