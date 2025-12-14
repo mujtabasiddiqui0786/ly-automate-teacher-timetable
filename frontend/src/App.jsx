@@ -12,32 +12,126 @@ const STORE_KEYS = {
   TEACHER: 'tt_teacher',
 };
 
-function Toast({ message, type }) {
+function Toast({ message, type, onClose }) {
   if (!message) return null;
-  const bg = type === 'error' ? '#fee2e2' : '#e0f2fe';
-  const color = type === 'error' ? '#b91c1c' : '#075985';
+  const bg = type === 'error' ? '#fef2f2' : type === 'success' ? '#f0fdf4' : '#eff6ff';
+  const color = type === 'error' ? '#dc2626' : type === 'success' ? '#16a34a' : '#2563eb';
+  const borderColor = type === 'error' ? '#fecaca' : type === 'success' ? '#bbf7d0' : '#bfdbfe';
+  const icon = type === 'error' ? '✕' : type === 'success' ? '✓' : 'ℹ';
+
   return (
     <div
       style={{
-        marginTop: 12,
-        padding: '10px 12px',
-        borderRadius: 8,
+        position: 'fixed',
+        top: 20,
+        right: 20,
+        padding: '14px 18px',
+        borderRadius: 12,
         background: bg,
         color,
-        border: `1px solid ${type === 'error' ? '#fecaca' : '#bae6fd'}`,
+        border: `1px solid ${borderColor}`,
+        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        minWidth: 280,
+        maxWidth: 400,
+        zIndex: 1000,
+        animation: 'slideIn 0.3s ease-out',
       }}
     >
-      {message}
+      <span style={{ fontSize: 18 }}>{icon}</span>
+      <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{message}</span>
+      {onClose && (
+        <button
+          onClick={onClose}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: color,
+            cursor: 'pointer',
+            fontSize: 18,
+            padding: 0,
+            width: 24,
+            height: 24,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: 0.7,
+          }}
+        >
+          ×
+        </button>
+      )}
+      <style>{`
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+      `}</style>
     </div>
   );
 }
 
-function Section({ title, children }) {
+function Header({ tenantSlug, onTenantChange }) {
   return (
-    <section style={{ padding: 12, border: '1px solid #eee', borderRadius: 10, background: '#fff' }}>
-      <h3 style={{ margin: '0 0 8px 0' }}>{title}</h3>
+    <header
+      style={{
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        color: 'white',
+        padding: '20px 0',
+        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+        marginBottom: 32,
+      }}
+    >
+      <div style={{ maxWidth: 1400, margin: '0 auto', padding: '0 32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700, letterSpacing: '-0.5px' }}>
+              📅 Teacher Timetable Automation
+            </h1>
+            <p style={{ margin: '4px 0 0 0', fontSize: 14, opacity: 0.9 }}>
+              Intelligent timetable extraction and management system
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255, 255, 255, 0.15)', padding: '8px 16px', borderRadius: 8 }}>
+              <span style={{ fontSize: 14, opacity: 0.9 }}>Tenant:</span>
+              <span style={{ fontWeight: 600, fontSize: 15 }}>{tenantSlug || 'Not selected'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function Card({ title, icon, children, style = {} }) {
+  return (
+    <div
+      style={{
+        background: '#ffffff',
+        borderRadius: 16,
+        padding: 24,
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)',
+        border: '1px solid #e5e7eb',
+        ...style,
+      }}
+    >
+      {title && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+          {icon && <span style={{ fontSize: 20 }}>{icon}</span>}
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#111827' }}>{title}</h2>
+        </div>
+      )}
       {children}
-    </section>
+    </div>
   );
 }
 
@@ -70,7 +164,6 @@ function App() {
         await axios.post('/api/tenants', { name: tenantSlug, slug: tenantSlug });
         const { data } = await axios.get(`/api/tenants/${tenantSlug}/teachers`);
         setTeachers(data);
-        // if the stored teacher is not part of the new list, clear it
         if (selectedTeacher && !data.find((t) => t._id === selectedTeacher._id)) {
           setSelectedTeacher(null);
           localStorage.removeItem(STORE_KEYS.TEACHER);
@@ -91,9 +184,11 @@ function App() {
       await axios.post(`/api/tenants/${tenantSlug}/teachers`, teacher);
       const { data } = await axios.get(`/api/tenants/${tenantSlug}/teachers`);
       setTeachers(data);
-      setToast({ message: 'Teacher created', type: 'info' });
+      setToast({ message: 'Teacher created successfully!', type: 'success' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
     } catch (err) {
       setToast({ message: err.response?.data?.error || 'Failed to create teacher', type: 'error' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 5000);
     }
   };
 
@@ -108,26 +203,31 @@ function App() {
     } catch (err) {
       if (err.response?.status !== 404) {
         setToast({ message: err.response?.data?.error || 'Failed to load timetable', type: 'error' });
+        setTimeout(() => setToast({ message: '', type: 'info' }), 5000);
       }
     }
   };
 
   const handleUpload = async (file) => {
     if (!selectedTeacher) {
-      setToast({ message: 'Select a teacher first', type: 'error' });
+      setToast({ message: 'Please select a teacher first', type: 'error' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
       return;
     }
     if (!file) {
       setToast({ message: 'Please select a file', type: 'error' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
       return;
     }
     const allowed = ['image/png', 'image/jpeg', 'application/pdf'];
     if (!allowed.includes(file.type)) {
-      setToast({ message: 'Only pdf/png/jpg are allowed', type: 'error' });
+      setToast({ message: 'Only PDF, PNG, and JPEG files are allowed', type: 'error' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
       return;
     }
     if (file.size > 15 * 1024 * 1024) {
       setToast({ message: 'File too large (max 15MB)', type: 'error' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
       return;
     }
 
@@ -142,9 +242,11 @@ function App() {
         { headers: { 'Content-Type': 'multipart/form-data' } }
       );
       setTimetable(data);
-      setToast({ message: 'Timetable uploaded and parsed', type: 'info' });
+      setToast({ message: 'Timetable extracted successfully!', type: 'success' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
     } catch (err) {
       setToast({ message: err.response?.data?.error || 'Failed to extract timetable', type: 'error' });
+      setTimeout(() => setToast({ message: '', type: 'info' }), 5000);
     } finally {
       setUploading(false);
     }
@@ -152,80 +254,158 @@ function App() {
 
   const handleSave = async (updatedTimetable) => {
     setTimetable(updatedTimetable);
-    setToast({ message: 'Timetable updated locally', type: 'info' });
+    setToast({ message: 'Timetable updated successfully!', type: 'success' });
+    setTimeout(() => setToast({ message: '', type: 'info' }), 3000);
   };
 
   return (
-    <main style={{ maxWidth: 1280, margin: '0 auto', padding: 24, fontFamily: 'Inter, sans-serif' }}>
-      <h1 style={{ marginBottom: 4 }}>Teacher Timetable Automation</h1>
-      <p style={{ color: '#555', marginTop: 0 }}>
-        Multi-tenant: onboard teachers, upload timetables (image/PDF), and view teacher-wise schedules.
-      </p>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-        <Section title="Tenants">
-          <TenantSelector value={tenantSlug} onChange={setTenantSlug} />
-        </Section>
-        <Section title="Upload / Re-run OCR">
-          <ImageUpload onUpload={handleUpload} loading={uploading} />
-          <p style={{ color: '#666', fontSize: 12, marginTop: 4 }}>
-            Allowed: pdf, png, jpg • Max 15MB • Re-upload replaces latest timetable for the selected teacher.
-          </p>
-        </Section>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 2fr', gap: 16 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Section title="Teachers">
-            <TeacherForm onCreate={handleCreateTeacher} />
-            <TeacherList
-              teachers={teachers}
-              loading={teacherLoading}
-              onSelect={handleSelectTeacher}
-              selectedId={selectedTeacher?._id}
-            />
-          </Section>
+    <div style={{ minHeight: '100vh', background: '#f9fafb' }}>
+      <style>{`
+        * {
+          box-sizing: border-box;
+        }
+        body {
+          margin: 0;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+        }
+      `}</style>
+      <Header tenantSlug={tenantSlug} onTenantChange={setTenantSlug} />
+      
+      <main style={{ maxWidth: 1400, margin: '0 auto', padding: '0 32px 48px' }}>
+        {/* Top Section: Tenant & Upload */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
+          <Card title="Organization" icon="🏢">
+            <TenantSelector value={tenantSlug} onChange={setTenantSlug} />
+          </Card>
+          
+          <Card title="Upload Timetable" icon="📤">
+            <ImageUpload onUpload={handleUpload} loading={uploading} />
+            <p style={{ color: '#6b7280', fontSize: 13, marginTop: 12, marginBottom: 0 }}>
+              Supported formats: PDF, PNG, JPEG • Maximum size: 15MB
+            </p>
+          </Card>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Section title="Teacher Details">
-            {selectedTeacher ? (
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 16 }}>{selectedTeacher.name}</div>
-                <div style={{ color: '#555', fontSize: 13 }}>
-                  {selectedTeacher.email || 'No email'} • {selectedTeacher.grade || 'No grade'}
-                </div>
-                {selectedTeacher.subjects?.length ? (
-                  <div style={{ marginTop: 6, color: '#444', fontSize: 13 }}>
-                    Subjects: {selectedTeacher.subjects.join(', ')}
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 6, color: '#777', fontSize: 13 }}>No subjects set</div>
-                )}
+        {/* Main Content: Teachers & Timetable */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr', gap: 24 }}>
+          {/* Left: Teachers */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <Card title="Teachers" icon="👥">
+              <TeacherForm onCreate={handleCreateTeacher} />
+              <div style={{ marginTop: 20 }}>
+                <TeacherList
+                  teachers={teachers}
+                  loading={teacherLoading}
+                  onSelect={handleSelectTeacher}
+                  selectedId={selectedTeacher?._id}
+                />
               </div>
-            ) : (
-              <p style={{ color: '#777' }}>Select a teacher to view details.</p>
-            )}
-          </Section>
+            </Card>
+          </div>
 
-          <Section title="Timetable">
-            {!selectedTeacher && <p style={{ color: '#777' }}>Select a teacher to view timetable.</p>}
-            {selectedTeacher && !hasTimetable && <p style={{ color: '#777' }}>No timetable uploaded yet.</p>}
-            {selectedTeacher && timetable && (
-              <>
-                <TimetableDisplay timetable={timetable} />
-                <TimetableEditor timetable={timetable} onSave={handleSave} />
-              </>
-            )}
-          </Section>
+          {/* Right: Teacher Details & Timetable */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <Card title="Teacher Details" icon="👤">
+              {selectedTeacher ? (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                    <div
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'white',
+                        fontSize: 20,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {selectedTeacher.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 18, color: '#111827', marginBottom: 4 }}>
+                        {selectedTeacher.name}
+                      </div>
+                      <div style={{ color: '#6b7280', fontSize: 14 }}>
+                        {selectedTeacher.email || 'No email'} {selectedTeacher.grade ? `• ${selectedTeacher.grade}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  {selectedTeacher.subjects?.length ? (
+                    <div style={{ marginTop: 16, padding: 12, background: '#f3f4f6', borderRadius: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 8 }}>Subjects</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {selectedTeacher.subjects.map((subject, idx) => (
+                          <span
+                            key={idx}
+                            style={{
+                              padding: '4px 12px',
+                              background: '#ffffff',
+                              borderRadius: 6,
+                              fontSize: 12,
+                              color: '#4b5563',
+                              border: '1px solid #e5e7eb',
+                            }}
+                          >
+                            {subject}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 16, padding: 12, background: '#f9fafb', borderRadius: 8, color: '#9ca3af', fontSize: 13 }}>
+                      No subjects assigned
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '32px 0', color: '#9ca3af' }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>👤</div>
+                  <p style={{ margin: 0, fontSize: 14 }}>Select a teacher to view details</p>
+                </div>
+              )}
+            </Card>
+
+            <Card title="Timetable" icon="📋">
+              {!selectedTeacher && (
+                <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>📅</div>
+                  <p style={{ margin: 0, fontSize: 14 }}>Select a teacher to view timetable</p>
+                </div>
+              )}
+              {selectedTeacher && !hasTimetable && (
+                <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>📤</div>
+                  <p style={{ margin: 0, fontSize: 14 }}>Upload a timetable image or PDF to get started</p>
+                </div>
+              )}
+              {selectedTeacher && timetable && (
+                <>
+                  <TimetableDisplay timetable={timetable} />
+                  <div style={{ marginTop: 24 }}>
+                    <TimetableEditor timetable={timetable} onSave={handleSave} />
+                  </div>
+                </>
+              )}
+            </Card>
+          </div>
         </div>
-      </div>
+      </main>
 
-      {error && <Toast message={error} type="error" />}
-      {toast.message && <Toast message={toast.message} type={toast.type} />}
-    </main>
+      {toast.message && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info' })}
+        />
+      )}
+    </div>
   );
 }
 
 export default App;
-

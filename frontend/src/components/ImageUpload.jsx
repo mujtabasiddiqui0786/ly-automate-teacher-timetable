@@ -1,16 +1,9 @@
 import React, { useRef, useState } from 'react';
 
-const dropZoneStyle = {
-  border: '2px dashed #ccc',
-  padding: 24,
-  borderRadius: 8,
-  textAlign: 'center',
-  marginBottom: 16,
-};
-
 function ImageUpload({ onUpload, loading }) {
   const inputRef = useRef(null);
   const [fileName, setFileName] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleFiles = (files) => {
     const file = files?.[0];
@@ -21,19 +14,71 @@ function ImageUpload({ onUpload, loading }) {
 
   const onDrop = (e) => {
     e.preventDefault();
+    setIsDragging(false);
     handleFiles(e.dataTransfer.files);
   };
 
+  const onDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const onDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
   return (
-    <section>
+    <div>
       <div
-        style={dropZoneStyle}
-        onDrop={onDrop}
-        onDragOver={(e) => e.preventDefault()}
         onClick={() => inputRef.current?.click()}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        style={{
+          border: `2px dashed ${isDragging ? '#667eea' : '#d1d5db'}`,
+          borderRadius: 12,
+          padding: '40px 24px',
+          textAlign: 'center',
+          background: isDragging ? '#f3f4f6' : '#ffffff',
+          cursor: 'pointer',
+          transition: 'all 0.2s ease',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
       >
-        <p>Drag & drop a timetable image/PDF or click to browse.</p>
-        <p style={{ color: '#666', fontSize: 14 }}>Supported: PNG, JPEG, PDF</p>
+        {loading ? (
+          <>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>⏳</div>
+            <p style={{ margin: 0, fontSize: 16, fontWeight: 500, color: '#374151' }}>Processing timetable...</p>
+            <p style={{ margin: '8px 0 0 0', fontSize: 14, color: '#6b7280' }}>This may take a few moments</p>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📎</div>
+            <p style={{ margin: 0, fontSize: 16, fontWeight: 500, color: '#374151', marginBottom: 8 }}>
+              {isDragging ? 'Drop file here' : 'Drag & drop or click to browse'}
+            </p>
+            <p style={{ margin: 0, fontSize: 14, color: '#6b7280' }}>
+              {fileName || 'PNG, JPEG, or PDF files'}
+            </p>
+            {fileName && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '8px 12px',
+                  background: '#eff6ff',
+                  borderRadius: 6,
+                  display: 'inline-block',
+                  fontSize: 13,
+                  color: '#2563eb',
+                }}
+              >
+                ✓ {fileName}
+              </div>
+            )}
+          </>
+        )}
         <input
           ref={inputRef}
           type="file"
@@ -41,12 +86,9 @@ function ImageUpload({ onUpload, loading }) {
           style={{ display: 'none' }}
           onChange={(e) => handleFiles(e.target.files)}
         />
-        {loading && <p>Extracting...</p>}
-        {fileName && !loading && <p>Selected: {fileName}</p>}
       </div>
-    </section>
+    </div>
   );
 }
 
 export default ImageUpload;
-
