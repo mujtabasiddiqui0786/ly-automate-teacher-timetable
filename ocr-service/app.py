@@ -140,9 +140,11 @@ def _deskew(gray):
 
 
 def _adaptive_kernels(w: int, h: int) -> Tuple[Tuple[int, int], Tuple[int, int]]:
-    # Dynamic kernel sizes with guard rails
-    hk = max(3, min(80, w // 50))
-    vk = max(3, min(80, h // 50))
+    # Dynamic kernel sizes with guard rails (tuned upward for better line detection)
+    hor_kernel_div = int(os.environ.get("HOR_KERNEL_DIV", "40"))  # was 50
+    ver_kernel_div = int(os.environ.get("VER_KERNEL_DIV", "40"))  # was 50
+    hk = max(3, min(80, w // hor_kernel_div))
+    vk = max(3, min(80, h // ver_kernel_div))
     return (hk, 1), (1, vk)
 
 
@@ -292,9 +294,9 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
     horiz = cv2.morphologyEx(th, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (hk_w, hk_h)))
     vert = cv2.morphologyEx(th, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (vk_w, vk_h)))
 
-    # Configurable eps and min_gap via environment variables (increased defaults to reduce over-segmentation)
-    eps_base = float(os.environ.get("LINE_EPS", min(w, h) * 0.015))  # increased from 0.01
-    eps = max(6, round(eps_base))
+    # Configurable eps and min_gap via environment variables (tuned for large PNGs)
+    eps_base = float(os.environ.get("LINE_EPS", min(w, h) * 0.015))  # increased for large images
+    eps = max(8, round(eps_base))
     x_lines = _line_positions(vert, axis=0, min_ratio=0.45, eps=eps)
     y_lines = _line_positions(horiz, axis=1, min_ratio=0.45, eps=eps)
 
@@ -306,17 +308,42 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
                 pruned.append(v)
         return pruned
 
-    min_gap_base = float(os.environ.get("MIN_GAP", min(w, h) * 0.012))  # increased from 0.008
+    min_gap_base = float(os.environ.get("MIN_GAP", min(w, h) * 0.012))
     min_gap = max(10, int(min_gap_base))
     x_lines = _prune(x_lines, min_gap)
     y_lines = _prune(y_lines, min_gap)
 
-    # Collapse close lines using median cell dimension
+    # Collapse close lines using median cell dimension (aggressive dedupe)
     if len(x_lines) > 2 and len(y_lines) > 2:
         median_cell_w = float(np.median([x_lines[i+1] - x_lines[i] for i in range(len(x_lines)-1)])) if len(x_lines) > 1 else w / 10
         median_cell_h = float(np.median([y_lines[i+1] - y_lines[i] for i in range(len(y_lines)-1)])) if len(y_lines) > 1 else h / 10
-        x_lines = _collapse_close_lines(x_lines, int(median_cell_w), threshold_fraction=0.4)
-        y_lines = _collapse_close_lines(y_lines, int(median_cell_h), threshold_fraction=0.4)
+        # Use 0.5 threshold as recommended
+        x_lines = _collapse_close_lines(x_lines, int(median_cell_w), threshold_fraction=0.5)
+        y_lines = _collapse_close_lines(y_lines, int(median_cell_h), threshold_fraction=0.5)
+        
+        # Aggressive dedupe: if grid is too large, rebuild with larger eps
+        expected_cols = int(os.environ.get("EXPECTED_COLS", "10"))
+        expected_rows = int(os.environ.get("EXPECTED_ROWS", "12"))
+        aggressive_threshold = float(os.environ.get("AGGRESSIVE_DEDUPE_THRESHOLD", expected_cols * 1.5))
+        
+        if len(x_lines) - 1 > aggressive_threshold:
+            # Rebuild with larger eps
+            eps_aggressive = int(eps * 1.5)
+            x_lines_new = _line_positions(vert, axis=0, min_ratio=0.45, eps=eps_aggressive)
+            x_lines_new = _prune(x_lines_new, min_gap)
+            if len(x_lines_new) < len(x_lines):
+                x_lines = x_lines_new
+                median_cell_w = float(np.median([x_lines[i+1] - x_lines[i] for i in range(len(x_lines)-1)])) if len(x_lines) > 1 else w / 10
+                x_lines = _collapse_close_lines(x_lines, int(median_cell_w), threshold_fraction=0.5)
+        
+        if len(y_lines) - 1 > aggressive_threshold:
+            eps_aggressive = int(eps * 1.5)
+            y_lines_new = _line_positions(horiz, axis=1, min_ratio=0.45, eps=eps_aggressive)
+            y_lines_new = _prune(y_lines_new, min_gap)
+            if len(y_lines_new) < len(y_lines):
+                y_lines = y_lines_new
+                median_cell_h = float(np.median([y_lines[i+1] - y_lines[i] for i in range(len(y_lines)-1)])) if len(y_lines) > 1 else h / 10
+                y_lines = _collapse_close_lines(y_lines, int(median_cell_h), threshold_fraction=0.5)
 
     # ensure boundaries
     if 0 not in x_lines:
@@ -331,28 +358,46 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
     x_lines = sorted(list(set(x_lines)))
     y_lines = sorted(list(set(y_lines)))
 
-    # build cells
+    # build cells and filter narrow columns (ignore thin decorative separators)
     cells = []
-    avg_cell_area = 0
     cell_areas = []
+    cell_widths = []
+    cell_heights = []
+    
     for ri in range(len(y_lines) - 1):
         for ci in range(len(x_lines) - 1):
             x0, x1 = x_lines[ci], x_lines[ci + 1]
             y0, y1 = y_lines[ri], y_lines[ri + 1]
-            area = (x1 - x0) * (y1 - y0)
+            width = x1 - x0
+            height = y1 - y0
+            area = width * height
             cell_areas.append(area)
-            if area >= 400:  # minimum area threshold
+            cell_widths.append(width)
+            cell_heights.append(height)
+    
+    # Compute median dimensions for filtering
+    median_width = float(np.median(cell_widths)) if cell_widths else w / 10
+    median_height = float(np.median(cell_heights)) if cell_heights else h / 10
+    min_cell_width_frac = float(os.environ.get("MIN_CELL_WIDTH_FRAC", "0.15"))
+    min_width = median_width * min_cell_width_frac
+    min_height = median_height * min_cell_width_frac
+    
+    # Build cells, filtering out narrow decorative separators
+    for ri in range(len(y_lines) - 1):
+        for ci in range(len(x_lines) - 1):
+            x0, x1 = x_lines[ci], x_lines[ci + 1]
+            y0, y1 = y_lines[ri], y_lines[ri + 1]
+            width = x1 - x0
+            height = y1 - y0
+            area = width * height
+            
+            # Filter: minimum area and minimum width/height to ignore thin separators
+            if area >= 400 and width >= min_width and height >= min_height:
                 cells.append({
                     "rowIndex": int(ri),
                     "colIndex": int(ci),
                     "bbox": {"x0": int(x0), "y0": int(y0), "x1": int(x1), "y1": int(y1)},
                 })
-    
-    # Reject tiny cells (< 2% of median cell area)
-    if cell_areas:
-        median_area = float(np.median(cell_areas))
-        min_area = max(400, median_area * 0.02)
-        cells = [c for c in cells if (c["bbox"]["x1"] - c["bbox"]["x0"]) * (c["bbox"]["y1"] - c["bbox"]["y0"]) >= min_area]
 
     # Merge narrow columns
     cells, x_lines = _merge_narrow_columns(cells, x_lines, y_lines)
@@ -385,8 +430,25 @@ def _grid_cells_from_lines(img_bgr, debug_dir=None):
     return cells
 
 
-def _maybe_split_cell(cell, th_img):
+def _maybe_split_cell(cell, th_img, median_cell_w=None, median_cell_h=None):
+    """
+    Split cell by projection only if it's large (width > 1.5 * median or height > 1.5 * median).
+    This prevents over-splitting normal cells.
+    """
     x0, y0, x1, y1 = cell["bbox"]["x0"], cell["bbox"]["y0"], cell["bbox"]["x1"], cell["bbox"]["y1"]
+    width = x1 - x0
+    height = y1 - y0
+    
+    # Only split if cell is significantly larger than median (merged box)
+    should_split = False
+    if median_cell_w and width > 1.5 * median_cell_w:
+        should_split = True
+    if median_cell_h and height > 1.5 * median_cell_h:
+        should_split = True
+    
+    if not should_split:
+        return [cell]
+    
     crop = th_img[y0:y1, x0:x1]
     if crop.size == 0:
         return [cell]
@@ -600,10 +662,16 @@ async def run_ocr_with_table(file: Optional[UploadFile] = File(default=None), im
         return JSONResponse(jsonable_encoder(resp, custom_encoder={np.generic: to_native, np.ndarray: to_native}))
 
     # Optional split of merged cells using projection on thresholded image
+    # Only split large cells (conditional projection split)
     th = cv2.adaptiveThreshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 9)
+    
+    # Compute median cell dimensions for conditional splitting
+    median_cell_w = float(np.median([c["bbox"]["x1"] - c["bbox"]["x0"] for c in cells])) if cells else None
+    median_cell_h = float(np.median([c["bbox"]["y1"] - c["bbox"]["y0"] for c in cells])) if cells else None
+    
     split_cells = []
     for c in cells:
-        split_cells.extend(_maybe_split_cell(c, th))
+        split_cells.extend(_maybe_split_cell(c, th, median_cell_w, median_cell_h))
     
     # Deduplicate cells: if multiple cells share same (rowIndex, colIndex), keep the largest one
     cell_map = {}
